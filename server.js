@@ -108,13 +108,24 @@ async function scanForEvents() {
     for (const a of unique) {
       const loc = extractLocation(a.title, a.description || "");
       if (!loc) continue;
+
+      // Debug: log what GNews gives us
+      console.log(`  [ARTICLE] "${a.title.slice(0,60)}..." => ${a.url}`);
+
+      // GNews returns article URL in a.url — use it directly
+      // Some APIs wrap in google redirect, strip that if needed
+      let articleUrl = a.url || "";
+      if (articleUrl.includes("news.google.com") && articleUrl.includes("url=")) {
+        try { articleUrl = new URL(articleUrl).searchParams.get("url") || articleUrl; } catch(e) {}
+      }
+
       events.push({
         id: Date.now() + events.length,
         type: classifyEvent(a.title, a.description || ""),
         title: a.title.slice(0, 120),
         description: (a.description || "").slice(0, 300),
         lat: loc.lat, lng: loc.lng, location: loc.location,
-        source: a.url, sourceName: a.source?.name || "News",
+        source: articleUrl, sourceName: a.source?.name || "News",
         image: a.image || "", time: a.publishedAt || new Date().toISOString(),
       });
     }
