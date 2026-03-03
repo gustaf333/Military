@@ -1,0 +1,13 @@
+{
+  "name": "sigint-backend",
+  "version": "1.0.0",
+  "description": "SIGINT - Global Military Event Tracker",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "cors": "^2.8.5"
+  }
+}
