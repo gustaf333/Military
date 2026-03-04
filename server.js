@@ -75,6 +75,27 @@ function extractLocation(title, desc) {
   return null;
 }
 
+// Trusted major news sources only
+const TRUSTED_SOURCES = [
+  "reuters.com", "bbc.com", "bbc.co.uk", "aljazeera.com", "apnews.com",
+  "france24.com", "dw.com", "theguardian.com", "nytimes.com", "washingtonpost.com",
+  "cnn.com", "rt.com", "tass.com", "xinhuanet.com", "scmp.com",
+  "timesofindia.indiatimes.com", "ndtv.com", "nhk.or.jp", "abc.net.au",
+  "yna.co.kr", "jpost.com", "timesofisrael.com", "haaretz.com",
+  "stripes.com", "militarytimes.com", "defense.gov", "army.mil",
+  "middleeasteye.net", "africanews.com", "theafricareport.com",
+  "kyivindependent.com", "ukrinform.net", "pravda.com.ua",
+  "arabnews.com", "dawn.com", "japantimes.co.jp", "globaltimes.cn",
+  "lemonde.fr", "elpais.com", "corriere.it", "spiegel.de",
+  "cbc.ca", "sky.com", "itvnews.com", "rte.ie",
+];
+
+function isTrustedSource(url) {
+  if (!url) return false;
+  const lower = url.toLowerCase();
+  return TRUSTED_SOURCES.some(s => lower.includes(s));
+}
+
 async function scanForEvents() {
   if (isScanning) return cachedEvents;
   isScanning = true;
@@ -90,7 +111,7 @@ async function scanForEvents() {
 
     for (const q of batch) {
       try {
-        const url = `https://gnews.io/api/v4/search?q=${encodeURIComponent(q)}&lang=en&max=5&token=${GNEWS_API_KEY}`;
+        const url = `https://gnews.io/api/v4/search?q=${encodeURIComponent(q)}&lang=en&max=10&token=${GNEWS_API_KEY}`;
         const res = await fetch(url);
         const data = await res.json();
         if (data.articles) allArticles.push(...data.articles);
@@ -102,7 +123,7 @@ async function scanForEvents() {
     const unique = allArticles.filter(a => {
       const k = a.title.toLowerCase().slice(0,50);
       if (seen.has(k)) return false; seen.add(k); return true;
-    });
+    }).filter(a => isTrustedSource(a.url));
 
     const events = [];
     for (const a of unique) {
@@ -134,7 +155,7 @@ async function scanForEvents() {
       cachedEvents = events;
       lastScanTime = new Date().toISOString();
     }
-    console.log(`Done: ${events.length} events from ${unique.length} articles`);
+    console.log(`Done: ${events.length} events from ${unique.length} trusted articles (${allArticles.length} total scraped)`);
     return cachedEvents;
   } catch (e) {
     console.error("Scan failed:", e.message);
