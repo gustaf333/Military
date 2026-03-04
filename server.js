@@ -284,22 +284,24 @@ async function scanForEvents() {
   const allArticles = [];
 
   try {
-    // Run 3 queries per scan, rotate over time
-    const idx = Math.floor(Date.now() / 900000) % queries.length;
-    const batch = [queries[idx], queries[(idx+1)%queries.length], queries[(idx+2)%queries.length]];
-
-    for (const q of batch) {
+    // Run ALL queries every scan — results are cached for 15 min so total daily cost stays low
+    for (const q of queries) {
       const data = await gnewsFetch(q);
       if (data?.articles) allArticles.push(...data.articles);
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise(r => setTimeout(r, 300));
     }
 
     const seen = new Set();
+    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
     const unique = allArticles.filter(a => {
       const k = a.title.toLowerCase().slice(0,50);
       if (seen.has(k)) return false; seen.add(k); return true;
-    }).filter(a => isTrustedSource(a.url, a.source?.name))
-      .sort((a, b) => getSourceTier(a.url, a.source?.name) - getSourceTier(b.url, b.source?.name));
+    }).filter(a => {
+      // Reject articles older than 7 days
+      const age = a.publishedAt ? new Date(a.publishedAt).getTime() : 0;
+      if (age < sevenDaysAgo) return false;
+      return isTrustedSource(a.url, a.source?.name);
+    }).sort((a, b) => getSourceTier(a.url, a.source?.name) - getSourceTier(b.url, b.source?.name));
 
     console.log(`  [FILTER] ${allArticles.length} total -> ${unique.length} trusted unique articles`);
     const events = [];
@@ -342,11 +344,11 @@ async function scanForEvents() {
 
 app.get("/api/scan", async (req, res) => {
   try {
-    const isStale = !lastScanTime || Date.now() - new Date(lastScanTime) > 15 * 60 * 1000;
+    const isStale = !lastScanTime || Date.now() - new Date(lastScanTime) > 6 * 60 * 60 * 1000; // 6 hours
     if (isStale) {
       await scanForEvents();
     } else {
-      const nextScan = new Date(new Date(lastScanTime).getTime() + 15 * 60 * 1000);
+      const nextScan = new Date(new Date(lastScanTime).getTime() + 6 * 60 * 60 * 1000);
       const minsLeft = Math.ceil((nextScan - Date.now()) / 60000);
       console.log(`  [SCAN] Skipped — next scan in ~${minsLeft} min`);
     }
@@ -365,5 +367,5 @@ app.listen(PORT, () => {
   console.log(`  Running on http://localhost:${PORT}`);
   console.log(`  Using GNews API (free tier)\n`);
   scanForEvents();
-  setInterval(scanForEvents, 15 * 60 * 1000); // every 15 min
+  setInterval(scanForEvents, 6 * 60 * 60 * 1000); // every 6 hours (16 queries x 4 scans = 64 req/day, under free tier 100)
 });
