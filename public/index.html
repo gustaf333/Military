@@ -132,14 +132,7 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
 <script>
 const API_BASE='';
 const WORLD_GEO='https://raw.githubusercontent.com/johan/world.geo.json/master/countries.geo.json';
-const DEMO_EVENTS=[
-{id:1,type:'airstrike',title:'Russian drone strike hits residential area in Kharkiv',description:'Shahed-type drones struck a residential block overnight. Multiple casualties reported.',lat:49.9935,lng:36.2304,location:'Kharkiv, Ukraine',time:'2026-03-03T02:14:00Z',source:'https://www.reuters.com/world/europe/russian-drones-strike-kharkiv',sourceName:'Reuters',image:''},
-{id:2,type:'movement',title:'NATO deploys troops to Polish-Belarusian border',description:'Reinforced battalion moved to eastern Poland with armored vehicles and air defense.',lat:52.1,lng:23.5,location:'Podlasie, Poland',time:'2026-03-03T06:30:00Z',source:'https://www.bbc.com/news/world-europe',sourceName:'BBC News',image:''},
-{id:3,type:'incident',title:'Military transport plane crashes near Juba',description:'AN-26 crashed after takeoff from Juba International Airport. 7 crew on board.',lat:4.87,lng:31.611,location:'Juba, South Sudan',time:'2026-03-03T08:45:00Z',source:'https://www.aljazeera.com/news',sourceName:'Al Jazeera',image:''},
-{id:4,type:'naval',title:'PLA Navy exercises near Taiwan Strait',description:'Large-scale exercises with 12+ warships and submarines per satellite analysis.',lat:24.5,lng:119.5,location:'Taiwan Strait',time:'2026-03-03T04:00:00Z',source:'https://www.reuters.com/world/asia-pacific',sourceName:'Reuters',image:''},
-{id:5,type:'airstrike',title:'Israeli airstrike on weapons depot in Syria',description:'IAF struck arms storage near Syrian-Jordanian border.',lat:32.6,lng:36.1,location:'Daraa, Syria',time:'2026-03-02T23:30:00Z',source:'https://www.timesofisrael.com',sourceName:'Times of Israel',image:''},
-{id:6,type:'naval',title:'Houthi missile strike on vessel in Red Sea',description:'Cargo vessel hit in southern Red Sea. Ship damaged but sailing.',lat:13.5,lng:42.5,location:'Red Sea, off Yemen',time:'2026-03-03T07:20:00Z',source:'https://www.reuters.com/world/middle-east',sourceName:'Reuters',image:''}
-];
+const DEMO_EVENTS=[];
 
 let map,markers=[],events=[],currentFilter='all';
 
@@ -179,7 +172,7 @@ async function fetchEvents(){
     const r=await fetch('/api/scan');
     if(r.ok){const d=await r.json();if(d.events&&d.events.length>0){loadEvents(d.events);return}}
   }catch(e){console.warn('Fetch failed:',e)}
-  loadEvents(DEMO_EVENTS);
+  if(events.length===0){document.getElementById('eventList').innerHTML='<div style="padding:20px;text-align:center;color:var(--t2);font-family:Share Tech Mono,monospace;font-size:11px;letter-spacing:1px">AWAITING DATA...<br>Next scan in 60s</div>'}
 }
 
 function loadEvents(data){

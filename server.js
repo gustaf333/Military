@@ -75,25 +75,47 @@ function extractLocation(title, desc) {
   return null;
 }
 
-// Trusted major news sources only
-const TRUSTED_SOURCES = [
+// Tier 1: Top priority — major international outlets
+const TIER1_SOURCES = [
   "reuters.com", "bbc.com", "bbc.co.uk", "aljazeera.com", "apnews.com",
   "france24.com", "dw.com", "theguardian.com", "nytimes.com", "washingtonpost.com",
-  "cnn.com", "rt.com", "tass.com", "xinhuanet.com", "scmp.com",
-  "timesofindia.indiatimes.com", "ndtv.com", "nhk.or.jp", "abc.net.au",
-  "yna.co.kr", "jpost.com", "timesofisrael.com", "haaretz.com",
-  "stripes.com", "militarytimes.com", "defense.gov", "army.mil",
-  "middleeasteye.net", "africanews.com", "theafricareport.com",
-  "kyivindependent.com", "ukrinform.net", "pravda.com.ua",
-  "arabnews.com", "dawn.com", "japantimes.co.jp", "globaltimes.cn",
-  "lemonde.fr", "elpais.com", "corriere.it", "spiegel.de",
-  "cbc.ca", "sky.com", "itvnews.com", "rte.ie",
+  "cnn.com", "timesofisrael.com", "jpost.com", "haaretz.com",
+  "rt.com", "tass.com", "kyivindependent.com",
+  "scmp.com", "ndtv.com", "nhk.or.jp", "dawn.com",
+  "sky.com", "middleeasteye.net", "alarabiya.net", "arabnews.com",
+  "stripes.com", "militarytimes.com",
 ];
+
+// Tier 2: Accepted — regional & secondary outlets  
+const TIER2_SOURCES = [
+  "cnbc.com", "foxnews.com", "itvnews.com",
+  "defense.gov", "army.mil", "janes.com",
+  "ukrinform.net", "pravda.com.ua",
+  "xinhuanet.com", "globaltimes.cn",
+  "timesofindia.indiatimes.com", "hindustantimes.com",
+  "timesnownews.com", "news18.com", "thehindu.com", "indianexpress.com",
+  "japantimes.co.jp", "yna.co.kr", "koreaherald.com", "geo.tv",
+  "africanews.com", "theafricareport.com",
+  "lemonde.fr", "elpais.com", "corriere.it", "spiegel.de", "rte.ie",
+  "dailyexcelsior.com", "irishmirror.ie", "morningstaronline.co.uk",
+  "cbc.ca", "abc.net.au",
+  "devdiscourse.com", "newsmax.com", "lokmattimes.com",
+];
+
+const ALL_TRUSTED = [...TIER1_SOURCES, ...TIER2_SOURCES];
 
 function isTrustedSource(url) {
   if (!url) return false;
   const lower = url.toLowerCase();
-  return TRUSTED_SOURCES.some(s => lower.includes(s));
+  return ALL_TRUSTED.some(s => lower.includes(s));
+}
+
+function getSourceTier(url) {
+  if (!url) return 99;
+  const lower = url.toLowerCase();
+  if (TIER1_SOURCES.some(s => lower.includes(s))) return 1;
+  if (TIER2_SOURCES.some(s => lower.includes(s))) return 2;
+  return 99;
 }
 
 async function scanForEvents() {
@@ -123,7 +145,8 @@ async function scanForEvents() {
     const unique = allArticles.filter(a => {
       const k = a.title.toLowerCase().slice(0,50);
       if (seen.has(k)) return false; seen.add(k); return true;
-    }).filter(a => isTrustedSource(a.url));
+    }).filter(a => isTrustedSource(a.url))
+      .sort((a, b) => getSourceTier(a.url) - getSourceTier(b.url));
 
     const events = [];
     for (const a of unique) {
