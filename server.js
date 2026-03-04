@@ -192,17 +192,34 @@ const TIER2_SOURCES = [
 
 const ALL_TRUSTED = [...TIER1_SOURCES, ...TIER2_SOURCES];
 
-function isTrustedSource(url) {
-  if (!url) return false;
-  const lower = url.toLowerCase();
-  return ALL_TRUSTED.some(s => lower.includes(s));
+// Build a map of source name keywords -> domain for fuzzy matching GNews source names
+// e.g. "Reuters" -> "reuters.com", "BBC News" -> "bbc.com"
+function domainFromSourceName(name) {
+  if (!name) return "";
+  return name.toLowerCase()
+    .replace(/\s+(news|times|post|online|wire|today|live|report|world|global|english|tv|media|digital|web|morning|breaking|daily|weekly)$/g, "")
+    .replace(/\s+/g, "")
+    .trim();
 }
 
-function getSourceTier(url) {
-  if (!url) return 99;
-  const lower = url.toLowerCase();
-  if (TIER1_SOURCES.some(s => lower.includes(s))) return 1;
-  if (TIER2_SOURCES.some(s => lower.includes(s))) return 2;
+function isTrustedSource(url, sourceName) {
+  const lowerUrl = (url || "").toLowerCase();
+  const lowerName = (sourceName || "").toLowerCase();
+  return ALL_TRUSTED.some(s => {
+    const domain = s.replace(/\.(com|net|org|co\.uk|or\.jp|net\.ua|com\.ua|indiatimes\.com)$/, "");
+    return lowerUrl.includes(s) || lowerName.includes(domain);
+  });
+}
+
+function getSourceTier(url, sourceName) {
+  const lowerUrl = (url || "").toLowerCase();
+  const lowerName = (sourceName || "").toLowerCase();
+  const match = (list) => list.some(s => {
+    const domain = s.replace(/\.(com|net|org|co\.uk|or\.jp|net\.ua|com\.ua|indiatimes\.com)$/, "");
+    return lowerUrl.includes(s) || lowerName.includes(domain);
+  });
+  if (match(TIER1_SOURCES)) return 1;
+  if (match(TIER2_SOURCES)) return 2;
   return 99;
 }
 
@@ -250,16 +267,17 @@ async function scanForEvents() {
     const unique = allArticles.filter(a => {
       const k = a.title.toLowerCase().slice(0,50);
       if (seen.has(k)) return false; seen.add(k); return true;
-    }).filter(a => isTrustedSource(a.url))
-      .sort((a, b) => getSourceTier(a.url) - getSourceTier(b.url));
+    }).filter(a => isTrustedSource(a.url, a.source?.name))
+      .sort((a, b) => getSourceTier(a.url, a.source?.name) - getSourceTier(b.url, b.source?.name));
 
+    console.log(`  [FILTER] ${allArticles.length} total -> ${unique.length} trusted unique articles`);
     const events = [];
     for (const a of unique) {
       const loc = extractLocation(a.title, a.description || "");
       if (!loc) continue;
 
       // Debug: log what GNews gives us
-      console.log(`  [ARTICLE] "${a.title.slice(0,60)}..." => ${a.url}`);
+      console.log(`  [ARTICLE] "${a.title.slice(0,60)}..." source="${a.source?.name}" url=${a.url?.slice(0,60)}`);
 
       // GNews returns article URL in a.url — use it directly
       // Some APIs wrap in google redirect, strip that if needed
