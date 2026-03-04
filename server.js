@@ -18,30 +18,50 @@ if (GNEWS_KEYS.length === 0) {
 // Track which key is currently active (advances on quota exhaustion)
 let activeKeyIndex = 0;
 
+// Track exhausted keys so we never retry them within the same day
+const exhaustedKeys = new Set();
+
 async function gnewsFetch(query) {
+  // Build ordered list: start from activeKeyIndex, skip exhausted ones
   for (let attempt = 0; attempt < GNEWS_KEYS.length; attempt++) {
     const idx = (activeKeyIndex + attempt) % GNEWS_KEYS.length;
+    if (exhaustedKeys.has(idx)) continue; // skip known-dead keys
     const key = GNEWS_KEYS[idx];
     const url = `https://gnews.io/api/v4/search?q=${encodeURIComponent(query)}&lang=en&max=10&token=${key}`;
     try {
       const res = await fetch(url);
       const data = await res.json();
-      // GNews returns errors array or 403/429 on quota exhaustion
       if (data.errors || res.status === 403 || res.status === 429) {
         const reason = data.errors?.[0] || `HTTP ${res.status}`;
-        console.warn(`  [KEY ${idx + 1}/${GNEWS_KEYS.length}] Quota/auth error: ${reason} — trying next key`);
+        console.warn(`  [KEY ${idx + 1}/${GNEWS_KEYS.length}] Exhausted: ${reason}`);
+        exhaustedKeys.add(idx); // permanently skip this key until reset
         activeKeyIndex = (idx + 1) % GNEWS_KEYS.length;
         continue;
       }
-      if (attempt > 0) console.log(`  [KEY ${idx + 1}/${GNEWS_KEYS.length}] Switched to key ${idx + 1}`);
+      if (attempt > 0) console.log(`  [KEY ${idx + 1}/${GNEWS_KEYS.length}] Now active`);
       return data;
     } catch (e) {
       console.warn(`  [KEY ${idx + 1}/${GNEWS_KEYS.length}] Fetch error: ${e.message}`);
     }
   }
-  console.error("  [GNEWS] All API keys exhausted or failed.");
+  console.error(`  [GNEWS] All ${GNEWS_KEYS.length} keys exhausted. Will retry after midnight UTC.`);
   return null;
 }
+
+// Reset exhausted keys at midnight UTC each day
+function scheduleKeyReset() {
+  const now = new Date();
+  const midnight = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
+  const msUntilMidnight = midnight - now;
+  setTimeout(() => {
+    exhaustedKeys.clear();
+    activeKeyIndex = 0;
+    console.log("  [GNEWS] Daily key reset — all keys re-enabled");
+    scheduleKeyReset(); // schedule next day's reset
+  }, msUntilMidnight);
+  console.log(`  Keys reset at midnight UTC (in ${Math.round(msUntilMidnight/3600000)}h)`);
+}
+scheduleKeyReset();
 
 console.log(`  Loaded ${GNEWS_KEYS.length} GNews API key(s)`);
 
@@ -260,8 +280,13 @@ function getSourceTier(url, sourceName) {
 
 async function scanForEvents() {
   if (isScanning) return cachedEvents;
+  // Don't bother scanning if all keys are known-exhausted
+  if (exhaustedKeys.size >= GNEWS_KEYS.length) {
+    console.log("  [SCAN] Skipped — all keys exhausted until midnight UTC");
+    return cachedEvents;
+  }
   isScanning = true;
-  console.log(`[${new Date().toISOString()}] Scanning...`);
+  console.log(`[${new Date().toISOString()}] Scanning... (keys available: ${GNEWS_KEYS.length - exhaustedKeys.size}/${GNEWS_KEYS.length})`);
 
   const queries = [
     "Iran US Israel airstrike",
