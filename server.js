@@ -3,12 +3,47 @@ const cors = require("cors");
 const path = require("path");
 
 const PORT = process.env.PORT || 3000;
-const GNEWS_API_KEY = process.env.GNEWS_API_KEY;
+// Multi-key fallback — add GNEWS_API_KEY_2 and GNEWS_API_KEY_3 as env vars for backup keys
+const GNEWS_KEYS = [
+  process.env.GNEWS_API_KEY,
+  process.env.GNEWS_API_KEY_2,
+  process.env.GNEWS_API_KEY_3,
+].filter(Boolean);
 
-if (!GNEWS_API_KEY) {
-  console.error("GNEWS_API_KEY is required. Get a free key at https://gnews.io");
+if (GNEWS_KEYS.length === 0) {
+  console.error("At least one GNEWS_API_KEY is required. Get a free key at https://gnews.io");
   process.exit(1);
 }
+
+// Track which key is currently active (advances on quota exhaustion)
+let activeKeyIndex = 0;
+
+async function gnewsFetch(query) {
+  for (let attempt = 0; attempt < GNEWS_KEYS.length; attempt++) {
+    const idx = (activeKeyIndex + attempt) % GNEWS_KEYS.length;
+    const key = GNEWS_KEYS[idx];
+    const url = `https://gnews.io/api/v4/search?q=${encodeURIComponent(query)}&lang=en&max=10&token=${key}`;
+    try {
+      const res = await fetch(url);
+      const data = await res.json();
+      // GNews returns errors array or 403/429 on quota exhaustion
+      if (data.errors || res.status === 403 || res.status === 429) {
+        const reason = data.errors?.[0] || `HTTP ${res.status}`;
+        console.warn(`  [KEY ${idx + 1}/${GNEWS_KEYS.length}] Quota/auth error: ${reason} — trying next key`);
+        activeKeyIndex = (idx + 1) % GNEWS_KEYS.length;
+        continue;
+      }
+      if (attempt > 0) console.log(`  [KEY ${idx + 1}/${GNEWS_KEYS.length}] Switched to key ${idx + 1}`);
+      return data;
+    } catch (e) {
+      console.warn(`  [KEY ${idx + 1}/${GNEWS_KEYS.length}] Fetch error: ${e.message}`);
+    }
+  }
+  console.error("  [GNEWS] All API keys exhausted or failed.");
+  return null;
+}
+
+console.log(`  Loaded ${GNEWS_KEYS.length} GNews API key(s)`);
 
 const app = express();
 app.use(cors());
@@ -254,12 +289,8 @@ async function scanForEvents() {
     const batch = [queries[idx], queries[(idx+1)%queries.length], queries[(idx+2)%queries.length]];
 
     for (const q of batch) {
-      try {
-        const url = `https://gnews.io/api/v4/search?q=${encodeURIComponent(q)}&lang=en&max=10&token=${GNEWS_API_KEY}`;
-        const res = await fetch(url);
-        const data = await res.json();
-        if (data.articles) allArticles.push(...data.articles);
-      } catch (e) { console.warn(`Query "${q}" failed:`, e.message); }
+      const data = await gnewsFetch(q);
+      if (data?.articles) allArticles.push(...data.articles);
       await new Promise(r => setTimeout(r, 500));
     }
 
@@ -311,8 +342,14 @@ async function scanForEvents() {
 
 app.get("/api/scan", async (req, res) => {
   try {
-    const isStale = !lastScanTime || Date.now() - new Date(lastScanTime) > 60000;
-    if (isStale) await scanForEvents();
+    const isStale = !lastScanTime || Date.now() - new Date(lastScanTime) > 15 * 60 * 1000;
+    if (isStale) {
+      await scanForEvents();
+    } else {
+      const nextScan = new Date(new Date(lastScanTime).getTime() + 15 * 60 * 1000);
+      const minsLeft = Math.ceil((nextScan - Date.now()) / 60000);
+      console.log(`  [SCAN] Skipped — next scan in ~${minsLeft} min`);
+    }
     res.json({ events: cachedEvents, lastScan: lastScanTime, eventCount: cachedEvents.length });
   } catch (e) { res.status(500).json({ error: "Scan failed", events: cachedEvents }); }
 });
