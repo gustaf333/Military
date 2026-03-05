@@ -18,14 +18,15 @@ if (GNEWS_KEYS.length === 0) {
 // Track which key is currently active (advances on quota exhaustion)
 let activeKeyIndex = 0;
 
-// Track exhausted keys so we never retry them within the same day
+// Round-robin counter — spreads requests evenly across all keys (~64 req/day each with 3 keys)
+let rrIndex = 0;
 const exhaustedKeys = new Set();
 
 async function gnewsFetch(query) {
-  // Build ordered list: start from activeKeyIndex, skip exhausted ones
+  // Try each key starting from round-robin position, skip exhausted ones
   for (let attempt = 0; attempt < GNEWS_KEYS.length; attempt++) {
-    const idx = (activeKeyIndex + attempt) % GNEWS_KEYS.length;
-    if (exhaustedKeys.has(idx)) continue; // skip known-dead keys
+    const idx = (rrIndex + attempt) % GNEWS_KEYS.length;
+    if (exhaustedKeys.has(idx)) continue;
     const key = GNEWS_KEYS[idx];
     const url = `https://gnews.io/api/v4/search?q=${encodeURIComponent(query)}&lang=en&max=10&token=${key}`;
     try {
@@ -34,11 +35,11 @@ async function gnewsFetch(query) {
       if (data.errors || res.status === 403 || res.status === 429) {
         const reason = data.errors?.[0] || `HTTP ${res.status}`;
         console.warn(`  [KEY ${idx + 1}/${GNEWS_KEYS.length}] Exhausted: ${reason}`);
-        exhaustedKeys.add(idx); // permanently skip this key until reset
-        activeKeyIndex = (idx + 1) % GNEWS_KEYS.length;
+        exhaustedKeys.add(idx);
         continue;
       }
-      if (attempt > 0) console.log(`  [KEY ${idx + 1}/${GNEWS_KEYS.length}] Now active`);
+      // Advance round-robin for next call
+      rrIndex = (idx + 1) % GNEWS_KEYS.length;
       return data;
     } catch (e) {
       console.warn(`  [KEY ${idx + 1}/${GNEWS_KEYS.length}] Fetch error: ${e.message}`);
@@ -55,9 +56,9 @@ function scheduleKeyReset() {
   const msUntilMidnight = midnight - now;
   setTimeout(() => {
     exhaustedKeys.clear();
-    activeKeyIndex = 0;
+    rrIndex = 0;
     console.log("  [GNEWS] Daily key reset — all keys re-enabled");
-    scheduleKeyReset(); // schedule next day's reset
+    scheduleKeyReset();
   }, msUntilMidnight);
   console.log(`  Keys reset at midnight UTC (in ${Math.round(msUntilMidnight/3600000)}h)`);
 }
@@ -325,21 +326,25 @@ async function scanForEvents() {
 
     const seen = new Set();
     const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-    const unique = allArticles.filter(a => {
+
+    const afterDedup = allArticles.filter(a => {
       const k = a.title.toLowerCase().slice(0,50);
       if (seen.has(k)) return false; seen.add(k); return true;
-    }).filter(a => {
-      // Reject articles older than 7 days
+    });
+    const afterAge = afterDedup.filter(a => {
       const age = a.publishedAt ? new Date(a.publishedAt).getTime() : 0;
-      if (age < sevenDaysAgo) return false;
-      return isTrustedSource(a.url, a.source?.name);
-    }).sort((a, b) => getSourceTier(a.url, a.source?.name) - getSourceTier(b.url, b.source?.name));
+      return age >= sevenDaysAgo;
+    });
+    const afterTrust = afterAge.filter(a => isTrustedSource(a.url, a.source?.name));
+    const unique = afterTrust.sort((a, b) => getSourceTier(a.url, a.source?.name) - getSourceTier(b.url, b.source?.name));
 
-    console.log(`  [FILTER] ${allArticles.length} total -> ${unique.length} trusted unique articles`);
+    console.log(`  [FILTER] ${allArticles.length} scraped -> ${afterDedup.length} dedup -> ${afterAge.length} fresh (<7d) -> ${afterTrust.length} trusted`);
+
     const events = [];
+    let droppedNoLocation = 0;
     for (const a of unique) {
       const loc = extractLocation(a.title, a.description || "");
-      if (!loc) continue;
+      if (!loc) { droppedNoLocation++; continue; }
 
       // Debug: log what GNews gives us
       console.log(`  [ARTICLE] "${a.title.slice(0,60)}..." source="${a.source?.name}" url=${a.url?.slice(0,60)}`);
@@ -366,7 +371,7 @@ async function scanForEvents() {
       cachedEvents = events;
       lastScanTime = new Date().toISOString();
     }
-    console.log(`Done: ${events.length} events from ${unique.length} trusted articles (${allArticles.length} total scraped)`);
+    console.log(`Done: ${events.length} events shown (${droppedNoLocation} dropped — no location match) from ${allArticles.length} total scraped`);
     return cachedEvents;
   } catch (e) {
     console.error("Scan failed:", e.message);
