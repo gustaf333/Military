@@ -214,8 +214,57 @@ function classifyEvent(title, desc) {
 
 function extractLocation(title, desc) {
   const text = (title + " " + desc).toLowerCase();
+  
+  // Sort keys by length (longest first) to match multi-word locations before single words
   const keys = Object.keys(LOCATION_DB).sort((a,b) => b.length - a.length);
-  for (const key of keys) { if (text.includes(key)) return LOCATION_DB[key]; }
+  
+  // First pass: exact matches
+  for (const key of keys) {
+    if (text.includes(key)) return LOCATION_DB[key];
+  }
+  
+  // Second pass: fuzzy matching for common variations
+  // Handle country adjectives (iranian -> iran, ukrainian -> ukraine)
+  const adjectives = {
+    'iranian': 'iran', 'iraqi': 'iraq', 'israeli': 'israel', 'syrian': 'syria',
+    'ukrainian': 'ukraine', 'russian': 'russia', 'yemeni': 'yemen',
+    'lebanese': 'lebanon', 'palestinian': 'gaza', 'pakistani': 'pakistan',
+    'indian': 'india', 'chinese': 'china', 'north korean': 'north korea',
+    'south korean': 'south korea', 'sudanese': 'sudan', 'somali': 'somalia',
+    'congolese': 'congo', 'ethiopian': 'ethiopia', 'nigerian': 'nigeria',
+    'malian': 'mali', 'venezuelan': 'venezuela', 'colombian': 'colombia',
+    'burmese': 'myanmar', 'taiwanese': 'taiwan', 'philippine': 'philippines',
+    'afghan': 'afghanistan', 'turkish': 'turkey', 'saudi': 'riyadh',
+  };
+  
+  for (const [adj, country] of Object.entries(adjectives)) {
+    if (text.includes(adj) && LOCATION_DB[country]) {
+      return LOCATION_DB[country];
+    }
+  }
+  
+  // Third pass: regional fallbacks
+  const regionalFallbacks = {
+    'middle east': 'iran',
+    'persian gulf': 'persian gulf',
+    'gulf region': 'persian gulf',
+    'levant': 'lebanon',
+    'sahel': 'mali',
+    'horn of africa': 'somalia',
+    'south china sea': 'south china sea',
+    'east china sea': 'taiwan',
+    'korean peninsula': 'north korea',
+    'kashmir region': 'kashmir',
+    'donbas': 'donetsk',
+    'crimean': 'crimea',
+  };
+  
+  for (const [region, key] of Object.entries(regionalFallbacks)) {
+    if (text.includes(region) && LOCATION_DB[key]) {
+      return LOCATION_DB[key];
+    }
+  }
+  
   return null;
 }
 
@@ -289,30 +338,45 @@ async function scanForEvents() {
   isScanning = true;
   console.log(`[${new Date().toISOString()}] Scanning... (keys available: ${GNEWS_KEYS.length - exhaustedKeys.size}/${GNEWS_KEYS.length})`);
 
-  // One query per region — broad enough to catch events, specific enough to avoid noise.
-  // Deliberately one Iran/Israel query (was two) to stop it dominating results.
+  // Expanded queries: 25 queries × 12 scans/day = 300 req/day (perfect for 3 keys)
+  // More general terms catch diverse events, less Iran/Russia heavy
   const queries = [
-    // Middle East & Gulf
-    "Iran Israel airstrike missile attack",
-    "Yemen Houthi Red Sea ship attack",
-    "Gaza Israel military strike",
-    "Lebanon Hezbollah strike Israel",
-    "Syria military operation airstrike",
-    "Iraq militia attack US forces",
-    // Europe
-    "Ukraine Russia frontline attack war",
-    "NATO troops deployment Europe",
-    // Africa
-    "Sudan civil war RSF military",
+    // === MIDDLE EAST (5 queries - reduced from 6) ===
+    "Middle East military strike conflict",  // General ME
+    "Iran strike attack military",  // Iran specific
+    "Gaza Israel military operation",
+    "Yemen Houthi attack shipping",
+    "Syria Lebanon Iraq military",
+    
+    // === EUROPE (3 queries) ===
+    "Ukraine Russia military attack frontline",
+    "Eastern Europe NATO military",
+    "Balkans Kosovo Serbia military",
+    
+    // === AFRICA (6 queries - increased coverage) ===
+    "Sudan RSF military clash war",
     "Somalia al-Shabaab attack military",
-    "Congo M23 DRC military clash",
-    // Asia
-    "Myanmar military junta airstrike fighting",
-    "Pakistan India Kashmir military",
+    "Congo DRC M23 military fighting",
+    "Ethiopia Tigray Amhara conflict",
+    "Mali Burkina Faso Niger military",
+    "Nigeria Boko Haram military attack",
+    
+    // === ASIA-PACIFIC (6 queries - increased) ===
+    "Myanmar military junta airstrike",
+    "Pakistan India Kashmir military border",
     "North Korea missile launch military",
-    // Americas
-    "Venezuela Colombia military conflict",
-    "Haiti gang violence military",
+    "South China Sea military Taiwan",
+    "Philippines insurgency military Abu Sayyaf",
+    "Afghanistan Taliban military attack",
+    
+    // === AMERICAS (3 queries) ===
+    "Venezuela Colombia military border",
+    "Haiti gang violence military intervention",
+    "Mexico cartel military operation",
+    
+    // === GLOBAL / MULTI-REGION (2 queries) ===
+    "naval warship military operation",
+    "drone strike military attack airstrike",
   ];
   const allArticles = [];
 
@@ -410,5 +474,5 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`  Running on http://localhost:${PORT}`);
   console.log(`  Using GNews API (free tier)\n`);
   scanForEvents();
-  setInterval(scanForEvents, 2 * 60 * 60 * 1000); // every 2 hours (16 queries x 12 scans = 192 req/day)
+  setInterval(scanForEvents, 2 * 60 * 60 * 1000); // every 2 hours (25 queries × 12 scans = 300 req/day)
 });
