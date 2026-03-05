@@ -288,22 +288,29 @@ async function scanForEvents() {
   isScanning = true;
   console.log(`[${new Date().toISOString()}] Scanning... (keys available: ${GNEWS_KEYS.length - exhaustedKeys.size}/${GNEWS_KEYS.length})`);
 
+  // One query per region — broad enough to catch events, specific enough to avoid noise.
+  // Deliberately one Iran/Israel query (was two) to stop it dominating results.
   const queries = [
-    "Iran US Israel airstrike",
-    "Iran missile drone attack Gulf",
-    "Ukraine Russia frontline war",
-    "Gaza Israel military",
-    "Lebanon Hezbollah strike",
-    "Sudan civil war military",
-    "Myanmar military junta fighting",
-    "Pakistan military strike insurgency",
-    "Thailand insurgency attack",
-    "Somalia al-Shabaab military",
-    "Venezuela military conflict",
-    "Congo M23 military clash",
-    "Syria ISIS military operation",
-    "Yemen Houthi Red Sea attack",
+    // Middle East & Gulf
+    "Iran Israel airstrike missile attack",
+    "Yemen Houthi Red Sea ship attack",
+    "Gaza Israel military strike",
+    "Lebanon Hezbollah strike Israel",
+    "Syria military operation airstrike",
+    "Iraq militia attack US forces",
+    // Europe
+    "Ukraine Russia frontline attack war",
     "NATO troops deployment Europe",
+    // Africa
+    "Sudan civil war RSF military",
+    "Somalia al-Shabaab attack military",
+    "Congo M23 DRC military clash",
+    // Asia
+    "Myanmar military junta airstrike fighting",
+    "Pakistan India Kashmir military",
+    "North Korea missile launch military",
+    // Americas
+    "Venezuela Colombia military conflict",
     "Haiti gang violence military",
   ];
   const allArticles = [];
@@ -369,15 +376,21 @@ async function scanForEvents() {
 
 app.get("/api/scan", async (req, res) => {
   try {
-    const isStale = !lastScanTime || Date.now() - new Date(lastScanTime) > 6 * 60 * 60 * 1000; // 6 hours
+    const isStale = !lastScanTime || Date.now() - new Date(lastScanTime) > 2 * 60 * 60 * 1000; // 2 hours
     if (isStale) {
       await scanForEvents();
     } else {
-      const nextScan = new Date(new Date(lastScanTime).getTime() + 6 * 60 * 60 * 1000);
+      const nextScan = new Date(new Date(lastScanTime).getTime() + 2 * 60 * 60 * 1000);
       const minsLeft = Math.ceil((nextScan - Date.now()) / 60000);
       console.log(`  [SCAN] Skipped — next scan in ~${minsLeft} min`);
     }
-    res.json({ events: cachedEvents, lastScan: lastScanTime, eventCount: cachedEvents.length });
+    const nextScanTime = lastScanTime ? new Date(new Date(lastScanTime).getTime() + 6 * 60 * 60 * 1000) : null;
+    res.json({
+      events: cachedEvents,
+      lastScan: lastScanTime,
+      nextScan: nextScanTime,
+      eventCount: cachedEvents.length,
+    });
   } catch (e) { res.status(500).json({ error: "Scan failed", events: cachedEvents }); }
 });
 
@@ -392,5 +405,5 @@ app.listen(PORT, () => {
   console.log(`  Running on http://localhost:${PORT}`);
   console.log(`  Using GNews API (free tier)\n`);
   scanForEvents();
-  setInterval(scanForEvents, 6 * 60 * 60 * 1000); // every 6 hours (16 queries x 4 scans = 64 req/day, under free tier 100)
+  setInterval(scanForEvents, 2 * 60 * 60 * 1000); // every 2 hours (16 queries x 12 scans = 192 req/day)
 });
