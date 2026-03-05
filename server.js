@@ -2,6 +2,15 @@ const express = require("express");
 const cors = require("cors");
 const path = require("path");
 
+// Polyfill for fetch in older Node versions
+if (typeof fetch === 'undefined') {
+  try {
+    global.fetch = require('node-fetch');
+  } catch (e) {
+    console.warn('[AIRCRAFT] node-fetch not available - install with: npm install node-fetch@2');
+  }
+}
+
 const PORT = process.env.PORT || 3000;
 // Multi-key fallback — add GNEWS_API_KEY_2 and GNEWS_API_KEY_3 as env vars for backup keys
 const GNEWS_KEYS = [
@@ -538,11 +547,28 @@ let cachedAircraft = [];
 let lastAircraftUpdate = null;
 
 async function fetchMilitaryAircraft() {
+  // Don't fetch if fetch is not available
+  if (typeof fetch === 'undefined') {
+    console.warn('[AIRCRAFT] Fetch not available - skipping aircraft tracking');
+    return cachedAircraft;
+  }
+  
   try {
     console.log('[AIRCRAFT] Fetching from OpenSky Network...');
     
     // OpenSky Network - free, no auth required
-    const response = await fetch('https://opensky-network.org/api/states/all');
+    // Add timeout to prevent hanging
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+    
+    const response = await fetch('https://opensky-network.org/api/states/all', {
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'SIGINT-Tracker/1.0'
+      }
+    });
+    clearTimeout(timeoutId);
+    
     if (!response.ok) {
       console.warn(`[AIRCRAFT] OpenSky returned ${response.status}`);
       return cachedAircraft;
@@ -589,7 +615,12 @@ async function fetchMilitaryAircraft() {
     
     return aircraft;
   } catch (error) {
-    console.error('[AIRCRAFT] Fetch error:', error.message);
+    // Don't crash on network errors - just log and return cache
+    if (error.name === 'AbortError') {
+      console.warn('[AIRCRAFT] Request timeout - OpenSky may be slow');
+    } else {
+      console.warn('[AIRCRAFT] Fetch error:', error.message);
+    }
     return cachedAircraft; // Return cache on error
   }
 }
