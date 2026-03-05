@@ -554,14 +554,14 @@ async function fetchMilitaryAircraft() {
   }
   
   try {
-    console.log('[AIRCRAFT] Fetching from OpenSky Network...');
+    console.log('[AIRCRAFT] Fetching from ADS-B.lol...');
     
-    // OpenSky Network - free, no auth required
-    // Add timeout to prevent hanging
+    // ADS-B.lol - free, no auth, server-friendly
+    // Fetch all aircraft globally
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
     
-    const response = await fetch('https://opensky-network.org/api/states/all', {
+    const response = await fetch('https://api.adsb.lol/v2/lat/0/lon/0/dist/25000', {
       signal: controller.signal,
       headers: {
         'User-Agent': 'SIGINT-Tracker/1.0'
@@ -570,41 +570,37 @@ async function fetchMilitaryAircraft() {
     clearTimeout(timeoutId);
     
     if (!response.ok) {
-      console.warn(`[AIRCRAFT] OpenSky returned ${response.status}`);
+      console.warn(`[AIRCRAFT] ADS-B.lol returned ${response.status}`);
       return cachedAircraft;
     }
     
     const data = await response.json();
     const aircraft = [];
     
-    if (data?.states) {
-      for (const state of data.states) {
-        const [icao24, callsign, origin_country, time_position, last_contact, 
-               longitude, latitude, baro_altitude, on_ground, velocity, 
-               true_track, vertical_rate, sensors, geo_altitude, squawk, spi, position_source] = state;
-        
+    if (data?.ac) {
+      for (const ac of data.ac) {
         // Skip if on ground or no position data
-        if (on_ground || !latitude || !longitude) continue;
+        if (ac.alt_baro === 'ground' || !ac.lat || !ac.lon) continue;
         
         // Try to identify as military
-        const militaryInfo = identifyMilitaryAircraft(callsign?.trim(), icao24);
+        const militaryInfo = identifyMilitaryAircraft(ac.flight?.trim(), ac.hex);
         if (!militaryInfo) continue; // Not identified as military
         
         aircraft.push({
-          icao24,
-          callsign: callsign?.trim() || 'Unknown',
+          icao24: ac.hex,
+          callsign: ac.flight?.trim() || ac.r || 'Unknown',
           country: militaryInfo.country,
           type: militaryInfo.type,
           category: militaryInfo.category,
           icon: militaryInfo.icon,
           flag: FLAGS[militaryInfo.country] || '🏴',
-          lat: latitude,
-          lng: longitude,
-          altitude: Math.round(geo_altitude || baro_altitude || 0),
-          speed: Math.round(velocity || 0),
-          heading: Math.round(true_track || 0),
-          vertical_rate: vertical_rate || 0,
-          last_contact: last_contact,
+          lat: ac.lat,
+          lng: ac.lon,
+          altitude: Math.round(ac.alt_baro || ac.alt_geom || 0),
+          speed: Math.round(ac.gs || 0),
+          heading: Math.round(ac.track || ac.true_heading || 0),
+          vertical_rate: ac.baro_rate || 0,
+          last_contact: Math.floor(Date.now() / 1000) - (ac.seen || 0),
         });
       }
     }
@@ -617,7 +613,7 @@ async function fetchMilitaryAircraft() {
   } catch (error) {
     // Don't crash on network errors - just log and return cache
     if (error.name === 'AbortError') {
-      console.warn('[AIRCRAFT] Request timeout - OpenSky may be slow');
+      console.warn('[AIRCRAFT] Request timeout - ADS-B.lol may be slow');
     } else {
       console.warn('[AIRCRAFT] Fetch error:', error.message);
     }
