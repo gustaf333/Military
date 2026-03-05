@@ -467,12 +467,163 @@ app.get("/api/status", (req, res) => {
   res.json({ status: "online", lastScan: lastScanTime, eventCount: cachedEvents.length, scanning: isScanning });
 });
 
+// === MILITARY AIRCRAFT TRACKING ===
+
+// Aircraft type database - maps ICAO codes to aircraft info
+const AIRCRAFT_DB = {
+  // US Military Transports
+  '4D0288': { type: 'C-17', country: 'US', category: 'transport', icon: 'c17' },
+  '4D0289': { type: 'C-17', country: 'US', category: 'transport', icon: 'c17' },
+  // Tankers
+  '4D2070': { type: 'KC-135', country: 'US', category: 'tanker', icon: 'tanker' },
+  // Reconnaissance
+  '4D03CB': { type: 'RC-135', country: 'US', category: 'recon', icon: 'recon' },
+  '4CA83E': { type: 'P-8', country: 'US', category: 'recon', icon: 'p8' },
+};
+
+// Military callsign patterns - helps identify military aircraft even without ICAO match
+const MILITARY_CALLSIGNS = {
+  'REACH': { country: 'US', type: 'Transport/Tanker' },
+  'RCH': { country: 'US', type: 'Transport/Tanker' },
+  'EVAC': { country: 'US', type: 'Medical Evacuation' },
+  'CONVOY': { country: 'US', type: 'Convoy Escort' },
+  'NATO': { country: 'NATO', type: 'NATO Aircraft' },
+  'LAGR': { country: 'US', type: 'Tanker' },
+  'RRR': { country: 'RU', type: 'Russian Military' },
+  'RA-': { country: 'RU', type: 'Russian State' },
+  'CTM': { country: 'FR', type: 'French Military' },
+  'GAF': { country: 'DE', type: 'German Air Force' },
+  'RAF': { country: 'GB', type: 'Royal Air Force' },
+  'RCF': { country: 'FR', type: 'French Air Force' },
+  'IAM': { country: 'IT', type: 'Italian Air Force' },
+  'AME': { country: 'ES', type: 'Spanish Air Force' },
+  'PAF': { country: 'PL', type: 'Polish Air Force' },
+  'RSAF': { country: 'SA', type: 'Royal Saudi Air Force' },
+  'CNV': { country: 'US', type: 'US Navy Convoy' },
+};
+
+// Country flags emoji
+const FLAGS = {
+  'US': '🇺🇸', 'RU': '🇷🇺', 'GB': '🇬🇧', 'FR': '🇫🇷', 'DE': '🇩🇪',
+  'IT': '🇮🇹', 'ES': '🇪🇸', 'PL': '🇵🇱', 'SA': '🇸🇦', 'NATO': '🏳️',
+  'TR': '🇹🇷', 'IL': '🇮🇱', 'UA': '🇺🇦', 'IN': '🇮🇳', 'CN': '🇨🇳',
+  'JP': '🇯🇵', 'KR': '🇰🇷', 'AU': '🇦🇺', 'CA': '🇨🇦',
+};
+
+function identifyMilitaryAircraft(callsign, icao24) {
+  // Check ICAO database first
+  if (AIRCRAFT_DB[icao24?.toUpperCase()]) {
+    return AIRCRAFT_DB[icao24.toUpperCase()];
+  }
+  
+  // Check callsign patterns
+  if (callsign) {
+    const upper = callsign.toUpperCase();
+    for (const [pattern, info] of Object.entries(MILITARY_CALLSIGNS)) {
+      if (upper.includes(pattern)) {
+        return {
+          type: info.type,
+          country: info.country,
+          category: 'military',
+          icon: 'military-generic'
+        };
+      }
+    }
+  }
+  
+  return null;
+}
+
+let cachedAircraft = [];
+let lastAircraftUpdate = null;
+
+async function fetchMilitaryAircraft() {
+  try {
+    console.log('[AIRCRAFT] Fetching from OpenSky Network...');
+    
+    // OpenSky Network - free, no auth required
+    const response = await fetch('https://opensky-network.org/api/states/all');
+    if (!response.ok) {
+      console.warn(`[AIRCRAFT] OpenSky returned ${response.status}`);
+      return cachedAircraft;
+    }
+    
+    const data = await response.json();
+    const aircraft = [];
+    
+    if (data?.states) {
+      for (const state of data.states) {
+        const [icao24, callsign, origin_country, time_position, last_contact, 
+               longitude, latitude, baro_altitude, on_ground, velocity, 
+               true_track, vertical_rate, sensors, geo_altitude, squawk, spi, position_source] = state;
+        
+        // Skip if on ground or no position data
+        if (on_ground || !latitude || !longitude) continue;
+        
+        // Try to identify as military
+        const militaryInfo = identifyMilitaryAircraft(callsign?.trim(), icao24);
+        if (!militaryInfo) continue; // Not identified as military
+        
+        aircraft.push({
+          icao24,
+          callsign: callsign?.trim() || 'Unknown',
+          country: militaryInfo.country,
+          type: militaryInfo.type,
+          category: militaryInfo.category,
+          icon: militaryInfo.icon,
+          flag: FLAGS[militaryInfo.country] || '🏴',
+          lat: latitude,
+          lng: longitude,
+          altitude: Math.round(geo_altitude || baro_altitude || 0),
+          speed: Math.round(velocity || 0),
+          heading: Math.round(true_track || 0),
+          vertical_rate: vertical_rate || 0,
+          last_contact: last_contact,
+        });
+      }
+    }
+    
+    cachedAircraft = aircraft;
+    lastAircraftUpdate = new Date().toISOString();
+    console.log(`[AIRCRAFT] Found ${aircraft.length} military aircraft`);
+    
+    return aircraft;
+  } catch (error) {
+    console.error('[AIRCRAFT] Fetch error:', error.message);
+    return cachedAircraft; // Return cache on error
+  }
+}
+
+app.get("/api/aircraft", async (req, res) => {
+  try {
+    // Cache for 60 seconds to avoid hammering OpenSky
+    const isFresh = lastAircraftUpdate && (Date.now() - new Date(lastAircraftUpdate) < 60000);
+    
+    if (!isFresh) {
+      await fetchMilitaryAircraft();
+    }
+    
+    res.json({
+      aircraft: cachedAircraft,
+      lastUpdate: lastAircraftUpdate,
+      count: cachedAircraft.length,
+    });
+  } catch (e) {
+    res.status(500).json({ error: 'Aircraft fetch failed', aircraft: cachedAircraft });
+  }
+});
+
+// Update aircraft every 60 seconds
+setInterval(fetchMilitaryAircraft, 60000);
+
 app.get("*", (req, res) => { res.sendFile(path.join(__dirname, "public", "index.html")); });
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`\n  SIGINT - Military Event Tracker`);
   console.log(`  Running on http://localhost:${PORT}`);
-  console.log(`  Using GNews API (free tier)\n`);
+  console.log(`  Using GNews API (free tier)`);
+  console.log(`  Live aircraft tracking: OpenSky Network\n`);
   scanForEvents();
+  fetchMilitaryAircraft(); // Initial aircraft fetch
   setInterval(scanForEvents, 2 * 60 * 60 * 1000); // every 2 hours (25 queries × 12 scans = 300 req/day)
 });
