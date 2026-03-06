@@ -448,7 +448,7 @@ async function scanForEvents() {
     
     // === AFRICA (6 queries - increased coverage) ===
     "Sudan RSF military clash war",
-    "Somalia al-Shabaab attack military",
+    "Somalia al Shabaab attack military",  // Fixed: removed hyphen
     "Congo DRC M23 military fighting",
     "Ethiopia Tigray Amhara conflict",
     "Mali Burkina Faso Niger military",
