@@ -554,6 +554,7 @@ function identifyMilitaryAircraft(callsign, icao24) {
 
 let cachedAircraft = [];
 let lastAircraftUpdate = null;
+let aircraftTrails = {}; // Store trails per aircraft
 
 async function fetchMilitaryAircraft() {
   // Don't fetch if fetch is not available
@@ -563,70 +564,131 @@ async function fetchMilitaryAircraft() {
   }
   
   try {
-    console.log('[AIRCRAFT] Fetching from ADS-B.lol...');
+    console.log('[AIRCRAFT] Fetching from FlightRadar24...');
     
-    // ADS-B.lol - free, no auth, server-friendly
-    // Fetch all aircraft globally
+    // FlightRadar24 public data endpoint - zone format for global coverage
+    // Using multiple zones to cover conflict regions
+    const zones = [
+      '25,70,30,80',   // Europe/Russia
+      '15,35,35,60',   // Middle East
+      '-10,-30,40,20', // Africa
+      '0,70,50,150',   // Asia
+    ];
+    
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
+    const timeoutId = setTimeout(() => controller.abort(), 20000);
     
-    const response = await fetch('https://api.adsb.lol/v2/lat/0/lon/0/dist/25000', {
-      signal: controller.signal,
-      headers: {
-        'User-Agent': 'SIGINT-Tracker/1.0'
+    const allAircraft = [];
+    
+    // Fetch all zones
+    for (const zone of zones) {
+      try {
+        const response = await fetch(`https://data-live.flightradar24.com/zones/fcgi/feed.js?bounds=${zone}&faa=1&satellite=1&mlat=1&flarm=1&adsb=1&gnd=0&air=1&vehicles=0&estimated=0&gliders=0&stats=0`, {
+          signal: controller.signal,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+          }
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          // FR24 returns object with aircraft IDs as keys
+          for (const [id, ac] of Object.entries(data)) {
+            // Skip metadata keys
+            if (id === 'full_count' || id === 'version' || id === 'stats') continue;
+            if (!Array.isArray(ac) || ac.length < 18) continue;
+            
+            allAircraft.push({ id, data: ac });
+          }
+        }
+        
+        await new Promise(r => setTimeout(r, 300)); // Rate limit between zones
+      } catch (e) {
+        console.warn(`[AIRCRAFT] Zone ${zone} failed:`, e.message);
       }
-    });
-    clearTimeout(timeoutId);
-    
-    if (!response.ok) {
-      console.warn(`[AIRCRAFT] ADS-B.lol returned ${response.status}`);
-      return cachedAircraft;
     }
     
-    const data = await response.json();
+    clearTimeout(timeoutId);
+    
     const aircraft = [];
     
-    if (data?.ac) {
-      for (const ac of data.ac) {
-        // Skip if on ground or no position data
-        if (ac.alt_baro === 'ground' || !ac.lat || !ac.lon) continue;
-        
-        // Try to identify as military
-        const militaryInfo = identifyMilitaryAircraft(ac.flight?.trim(), ac.hex);
-        if (!militaryInfo) continue; // Not identified as military
-        
-        aircraft.push({
-          icao24: ac.hex,
-          callsign: ac.flight?.trim() || ac.r || 'Unknown',
-          country: militaryInfo.country,
-          type: militaryInfo.type,
-          category: militaryInfo.category,
-          icon: militaryInfo.icon,
-          flag: FLAGS[militaryInfo.country] || '🏴',
-          lat: ac.lat,
-          lng: ac.lon,
-          altitude: Math.round(ac.alt_baro || ac.alt_geom || 0),
-          speed: Math.round(ac.gs || 0),
-          heading: Math.round(ac.track || ac.true_heading || 0),
-          vertical_rate: ac.baro_rate || 0,
-          last_contact: Math.floor(Date.now() / 1000) - (ac.seen || 0),
-        });
-      }
+    for (const { id, data: ac } of allAircraft) {
+      // FR24 format: [lat, lng, heading, alt, speed, squawk, radar, type, reg, timestamp, from, to, callsign, ...]
+      const [lat, lng, heading, altitude, speed, squawk, radar, acType, registration, timestamp, origin, destination, callsign] = ac;
+      
+      // Skip if on ground or no position
+      if (!lat || !lng || altitude === 0) continue;
+      
+      // Try to identify as military
+      const militaryInfo = identifyMilitaryAircraft(callsign?.trim(), registration);
+      if (!militaryInfo) continue;
+      
+      // Fetch trail data for this aircraft
+      const trail = await fetchAircraftTrail(id);
+      
+      aircraft.push({
+        icao24: registration || id,
+        flightId: id,
+        callsign: callsign?.trim() || 'Unknown',
+        country: militaryInfo.country,
+        type: militaryInfo.type,
+        category: militaryInfo.category,
+        icon: militaryInfo.icon,
+        flag: FLAGS[militaryInfo.country] || '🏴',
+        lat,
+        lng,
+        altitude: Math.round(altitude || 0),
+        speed: Math.round(speed || 0),
+        heading: Math.round(heading || 0),
+        vertical_rate: 0,
+        last_contact: Math.floor(Date.now() / 1000) - (Math.floor(Date.now() / 1000) - timestamp),
+        trail: trail || [], // Flight path
+      });
     }
     
     cachedAircraft = aircraft;
     lastAircraftUpdate = new Date().toISOString();
-    console.log(`[AIRCRAFT] Found ${aircraft.length} military aircraft`);
+    console.log(`[AIRCRAFT] Found ${aircraft.length} military aircraft with trails`);
     
     return aircraft;
   } catch (error) {
     // Don't crash on network errors - just log and return cache
     if (error.name === 'AbortError') {
-      console.warn('[AIRCRAFT] Request timeout - ADS-B.lol may be slow');
+      console.warn('[AIRCRAFT] Request timeout - FlightRadar24 may be slow');
     } else {
       console.warn('[AIRCRAFT] Fetch error:', error.message);
     }
     return cachedAircraft; // Return cache on error
+  }
+}
+
+async function fetchAircraftTrail(flightId) {
+  try {
+    // FR24 trail endpoint - returns recent flight path
+    const response = await fetch(`https://data-live.flightradar24.com/clickhandler/?flight=${flightId}`, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    });
+    
+    if (!response.ok) return [];
+    
+    const data = await response.json();
+    
+    // Extract trail points from response
+    if (data?.trail && Array.isArray(data.trail)) {
+      // FR24 trail format: [lat, lng, alt, speed, timestamp, ...]
+      return data.trail.map(point => ({
+        lat: point.lat,
+        lng: point.lng,
+        alt: point.alt,
+        timestamp: point.ts
+      })).slice(-30); // Last 30 points (about 30-60 mins depending on update frequency)
+    }
+    
+    return [];
+  } catch (e) {
+    return [];
   }
 }
 
