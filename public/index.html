@@ -279,7 +279,7 @@ function renderAircraft(){
       const svg=AIRCRAFT_ICONS[ac.icon]||AIRCRAFT_ICONS['military-generic'];
       const icon=L.divIcon({
         className:'aircraft-marker',
-        html:`<div style="transform:rotate(${ac.heading}deg)">${svg}</div>`,
+        html:`<div style="transform:rotate(${ac.heading}deg);transform-origin:center center;width:32px;height:32px">${svg}</div>`,
         iconSize:[32,32],
         iconAnchor:[16,16]
       });
