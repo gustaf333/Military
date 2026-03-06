@@ -12,12 +12,20 @@ if (typeof fetch === 'undefined') {
 }
 
 const PORT = process.env.PORT || 3000;
-// Multi-key fallback — add GNEWS_API_KEY_2 and GNEWS_API_KEY_3 as env vars for backup keys
+
+// === MULTI-SOURCE NEWS AGGREGATION ===
+// GNews - 3 keys for rotation
 const GNEWS_KEYS = [
   process.env.GNEWS_API_KEY,
   process.env.GNEWS_API_KEY_2,
   process.env.GNEWS_API_KEY_3,
 ].filter(Boolean);
+
+// NewsAPI - 100 req/day
+const NEWSAPI_KEY = process.env.NEWSAPI_KEY || 'ec923c7514bb454294de46fbe03c1d6a';
+
+// NewsData.io - 200 req/day
+const NEWSDATA_KEY = process.env.NEWSDATA_KEY || 'pub_32610991868e46b893df957707512f64';
 
 if (GNEWS_KEYS.length === 0) {
   console.error("At least one GNEWS_API_KEY is required. Get a free key at https://gnews.io");
@@ -355,6 +363,64 @@ function getSourceTier(url, sourceName) {
   return 99;
 }
 
+// === NEWSAPI.ORG INTEGRATION ===
+async function newsApiFetch(query) {
+  try {
+    const url = `https://newsapi.org/v2/everything?q=${encodeURIComponent(query)}&language=en&sortBy=publishedAt&pageSize=10&apiKey=${NEWSAPI_KEY}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    
+    if (res.status === 429 || data.status === 'error') {
+      console.warn('[NEWSAPI] Rate limited or error:', data.message);
+      return null;
+    }
+    
+    // Convert NewsAPI format to GNews format
+    return {
+      articles: data.articles?.map(a => ({
+        title: a.title,
+        description: a.description,
+        url: a.url,
+        image: a.urlToImage,
+        publishedAt: a.publishedAt,
+        source: { name: a.source?.name }
+      })) || []
+    };
+  } catch (e) {
+    console.warn('[NEWSAPI] Fetch error:', e.message);
+    return null;
+  }
+}
+
+// === NEWSDATA.IO INTEGRATION ===
+async function newsdataFetch(query) {
+  try {
+    const url = `https://newsdata.io/api/1/news?apikey=${NEWSDATA_KEY}&q=${encodeURIComponent(query)}&language=en&category=politics`;
+    const res = await fetch(url);
+    const data = await res.json();
+    
+    if (data.status !== 'success') {
+      console.warn('[NEWSDATA] Error:', data.results?.message);
+      return null;
+    }
+    
+    // Convert NewsData format to GNews format
+    return {
+      articles: data.results?.map(a => ({
+        title: a.title,
+        description: a.description,
+        url: a.link,
+        image: a.image_url,
+        publishedAt: a.pubDate,
+        source: { name: a.source_id }
+      })) || []
+    };
+  } catch (e) {
+    console.warn('[NEWSDATA] Fetch error:', e.message);
+    return null;
+  }
+}
+
 async function scanForEvents() {
   if (isScanning) return cachedEvents;
   // Don't bother scanning if all keys are known-exhausted
@@ -408,12 +474,36 @@ async function scanForEvents() {
   const allArticles = [];
 
   try {
-    // Run ALL queries every scan — results are cached for 15 min so total daily cost stays low
-    for (const q of queries) {
+    console.log('[SCAN] Fetching from multiple sources: GNews, NewsAPI, NewsData.io');
+    
+    // Fetch from all sources in parallel for speed
+    // Use fewer queries for NewsAPI/NewsData since they have lower rate limits
+    const primaryQueries = queries.slice(0, 8); // Use 8 most important queries for all sources
+    
+    for (const q of primaryQueries) {
+      // Fetch from all 3 sources simultaneously
+      const [gnewsData, newsApiData, newsdataData] = await Promise.all([
+        gnewsFetch(q),
+        newsApiFetch(q),
+        newsdataFetch(q)
+      ]);
+      
+      // Combine articles from all sources
+      if (gnewsData?.articles) allArticles.push(...gnewsData.articles);
+      if (newsApiData?.articles) allArticles.push(...newsApiData.articles);
+      if (newsdataData?.articles) allArticles.push(...newsdataData.articles);
+      
+      await new Promise(r => setTimeout(r, 400)); // Rate limit
+    }
+    
+    // Fetch remaining queries from GNews only (since it has more quota)
+    for (const q of queries.slice(8)) {
       const data = await gnewsFetch(q);
       if (data?.articles) allArticles.push(...data.articles);
       await new Promise(r => setTimeout(r, 300));
     }
+
+    console.log(`[SCAN] Fetched ${allArticles.length} total articles from all sources`);
 
     const seen = new Set();
     const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
